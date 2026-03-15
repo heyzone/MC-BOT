@@ -1,0 +1,24 @@
+{
+  "name": "pathfinder-pro-hybrid",
+  "version": "2.5.0",
+  "description": "Advanced Minecraft Bot Manager with Pterodactyl Integration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "axios": "^1.6.8",
+    "express": "^4.18.2",
+    "form-data": "^4.0.0",
+    "mineflayer": "^4.14.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "minecraft-data": "^3.69.0",
+    "multer": "^1.4.5-lts.1",
+    "prismarine-auth": "^2.3.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "license": "MIT"
+}
