@@ -29,7 +29,7 @@ const mcDataCache = new Map();
 
 const FF_DIR = path.join(__dirname, 'node_modules', '.fire');
 const MUSIC_DIR = path.join(__dirname, 'node_modules', '.music_cache');
-const TAVERN_DIR = path.join(__dirname, 'node_modules', '.tavern');
+const TAVERN_DIR = path.join(DATA_DIR, '.tavern');
 const TAVERN_CONFIG_FILE = path.join(TAVERN_DIR, 'config.json');
 
 let ffLiteProcess = null, cfTunnelProcess = null, cfTunnelUrl = '', ffLogs = [];
@@ -55,20 +55,12 @@ setInterval(function(){var s=getMemoryStatus();if(parseFloat(s.percent)>=80){mcD
 
 function executeRestartSequence(i,m){if(!i||!i.entity)return;i.chat('/restart');m.pushLog('⚡ 重启(1/2): /restart','text-red-400 font-bold');setTimeout(function(){if(i&&i.entity){i.chat('restart');m.pushLog('⚡ 重启(2/2): restart','text-red-500 font-bold')}},800);m.lastRestartTick=Date.now()}
 
-// 内存配置缓存，供环境变量导出兜底
-let botsConfigCache = [];
 async function saveBotsConfig(){
   try{
-    botsConfigCache = Array.from(activeBots.values()).map(function(b){
+    var c = Array.from(activeBots.values()).map(function(b){
       return{id:b.id,host:b.targetHost,port:b.targetPort,username:b.username,settings:b.settings,logs:b.logs.slice(0,30)}
     });
-    var json = JSON.stringify(botsConfigCache, null, 2);
-    // 主路径写入（/data 或 __dirname）
-    try{ await fs.writeFile(CONFIG_FILE, json); }catch(e){}
-    // 同时写 __dirname 作为备用（容器内源码目录）
-    if(DATA_DIR !== __dirname){
-      try{ await fs.writeFile(path.join(__dirname,'bots_config.json'), json); }catch(e){}
-    }
+    await fs.writeFile(CONFIG_FILE, JSON.stringify(c, null, 2));
   }catch(e){}
 }
 
@@ -107,7 +99,9 @@ app.post("/api/config/import",async function(req,res){
     await saveBotsConfig();
     res.json({success:true,count:list.length});
   }catch(e){res.status(400).json({success:false,msg:e.message})}
-});(){for(var entry of activeBots.entries()){var bm=entry[1];if(bm.settings.pterodactyl.guard&&bm.settings.pterodactyl.url&&bm.settings.pterodactyl.key&&bm.settings.pterodactyl.id)try{var pto=bm.settings.pterodactyl;var r=await axios.get(pto.url+'/api/client/servers/'+pto.id+'/resources',{headers:{'Authorization':'Bearer '+pto.key},timeout:5000});if(r.data.attributes.current_state!=='running'&&r.data.attributes.current_state!=='starting'){bm.pushLog('🛡️ 守护开机...','text-yellow-500');await axios.post(pto.url+'/api/client/servers/'+pto.id+'/power',{signal:'start'},{headers:{'Authorization':'Bearer '+pto.key}})}}catch(e){}}},3*60*1000);
+});
+
+setInterval(async function(){for(var entry of activeBots.entries()){var bm=entry[1];if(bm.settings.pterodactyl.guard&&bm.settings.pterodactyl.url&&bm.settings.pterodactyl.key&&bm.settings.pterodactyl.id)try{var pto=bm.settings.pterodactyl;var r=await axios.get(pto.url+'/api/client/servers/'+pto.id+'/resources',{headers:{'Authorization':'Bearer '+pto.key},timeout:5000});if(r.data.attributes.current_state!=='running'&&r.data.attributes.current_state!=='starting'){bm.pushLog('🛡️ 守护开机...','text-yellow-500');await axios.post(pto.url+'/api/client/servers/'+pto.id+'/power',{signal:'start'},{headers:{'Authorization':'Bearer '+pto.key}})}}catch(e){}}},3*60*1000);
 
 function pushFFLog(m,c){c=c||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});ffLogs.unshift({time:t,msg:escapeHtml(stripAnsi(m)),color:c});if(ffLogs.length>100)ffLogs=ffLogs.slice(0,100)}
 function pushMusicLog(m,c){c=c||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});musicLogs.unshift({time:t,msg:m,color:c});if(musicLogs.length>30)musicLogs=musicLogs.slice(0,30)}
@@ -303,25 +297,19 @@ details summary::-webkit-details-marker{display:none}
 <button id="close-persist" class="text-slate-400 hover:text-white text-2xl font-bold cursor-pointer">&times;</button>
 </div>
 <div id="persist-status-box" class="mb-4 p-3 rounded-xl border text-xs font-mono"></div>
-<div class="space-y-5">
-<div class="bg-black/30 rounded-2xl p-4 border border-emerald-500/10">
-<p class="text-xs font-bold text-emerald-400 mb-1">✅ 方案一：Docker Volume（推荐）</p>
-<p class="text-xs text-slate-400 mb-2">启动容器时挂载 <code class="text-cyan-300">/data</code> 目录，配置将自动持久化，无需手动操作。</p>
-<div class="bg-black/60 rounded-xl p-3 font-mono text-[10px] text-cyan-300 border border-white/5 select-all">docker run -v /your/local/path:/data ... 你的镜像名</div>
-<p class="text-[10px] text-slate-500 mt-1">HuggingFace Space：在 Space 设置中开启 Persistent Storage，自动挂载到 /data。</p>
-</div>
+<div class="space-y-4">
 <div class="bg-black/30 rounded-2xl p-4 border border-blue-500/10">
-<p class="text-xs font-bold text-blue-400 mb-1">🔑 方案二：BOTS_CONFIG 环境变量（兜底）</p>
-<p class="text-xs text-slate-400 mb-2">无法挂载 Volume 时，导出配置字符串 → 粘贴到 HuggingFace Secrets 的 <code class="text-yellow-300">BOTS_CONFIG</code> 变量，下次启动自动读取。</p>
+<p class="text-xs font-bold text-blue-400 mb-1">📤 导出配置备份</p>
+<p class="text-xs text-slate-400 mb-3">将当前所有假人配置导出为 JSON 字符串，可本地保存，容器异常时用于手动恢复。</p>
 <div class="flex gap-2">
-<button id="btn-export-config" class="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer">📤 导出当前配置</button>
-<button id="btn-copy-config" class="bg-slate-700 hover:bg-slate-600 flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer opacity-50" disabled>📋 复制到剪贴板</button>
+<button id="btn-export-config" class="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer">📤 生成配置字符串</button>
+<button id="btn-copy-config" class="bg-slate-700 hover:bg-slate-600 flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer opacity-50">📋 复制</button>
 </div>
-<textarea id="config-export-box" rows="4" readonly placeholder="点击「导出」生成配置字符串..." class="input-dark w-full rounded-xl px-3 py-2 text-[10px] font-mono text-cyan-300 mt-2 resize-none"></textarea>
+<textarea id="config-export-box" rows="4" readonly placeholder="点击「生成配置字符串」..." class="input-dark w-full rounded-xl px-3 py-2 text-[10px] font-mono text-cyan-300 mt-2 resize-none"></textarea>
 </div>
 <div class="bg-black/30 rounded-2xl p-4 border border-purple-500/10">
-<p class="text-xs font-bold text-purple-400 mb-1">⬇️ 手动导入配置</p>
-<p class="text-xs text-slate-400 mb-2">粘贴之前导出的配置字符串，立即恢复所有假人。</p>
+<p class="text-xs font-bold text-purple-400 mb-1">⬇️ 手动导入恢复</p>
+<p class="text-xs text-slate-400 mb-2">粘贴之前导出的配置字符串，立即重建所有假人。</p>
 <textarea id="config-import-box" rows="3" placeholder="粘贴配置字符串..." class="input-dark w-full rounded-xl px-3 py-2 text-[10px] font-mono text-white resize-none"></textarea>
 <button id="btn-import-config" class="btn-primary w-full py-2.5 rounded-xl text-xs font-bold mt-2 cursor-pointer">⬇️ 立即导入并恢复假人</button>
 </div>
@@ -439,10 +427,10 @@ async function loadPersistStatus(){
     var box=document.getElementById('persist-status-box');
     if(d.usingVolume){
       box.className='mb-4 p-3 rounded-xl border text-xs font-mono bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
-      box.innerHTML='✅ 已检测到 <b>/data</b> 持久卷，配置自动持久化中<br><span class="opacity-60">配置文件：'+d.configFile+'</span>';
+      box.innerHTML='✅ 持久卷已挂载，配置自动保存到 <b>/data/bots_config.json</b><br><span class="opacity-60">重启后假人将自动恢复，无需任何操作。</span>';
     }else{
       box.className='mb-4 p-3 rounded-xl border text-xs font-mono bg-yellow-500/10 border-yellow-500/30 text-yellow-300';
-      box.innerHTML='⚠️ 未检测到 /data 持久卷，当前写入：<b>'+d.configFile+'</b><br><span class="opacity-70">容器重启后文件可能丢失，建议使用下方方案。</span>';
+      box.innerHTML='⚠️ 未检测到 /data 持久卷，配置写入 <b>'+d.configFile+'</b><br><span class="opacity-70">容器重启后文件可能丢失，建议在 HuggingFace Space 设置中挂载持久存储。</span>';
     }
   }catch(e){}
 }
@@ -627,20 +615,15 @@ updateUI(true);
 
 const PORT = process.env.SERVER_PORT || 4681;
 app.listen(PORT, '0.0.0.0', function(){
-  // 三级读取优先级：1) /data/bots_config.json  2) BOTS_CONFIG 环境变量  3) __dirname/bots_config.json
+  // 读取持久化配置：优先 /data/bots_config.json，没有则用 __dirname/bots_config.json
   var savedBots = null;
-  // 优先级1: /data 持久卷
   if(fsSync.existsSync(CONFIG_FILE)){
     try{ savedBots = JSON.parse(fsSync.readFileSync(CONFIG_FILE,'utf8')); }catch(e){}
   }
-  // 优先级2: BOTS_CONFIG 环境变量（HuggingFace Secrets 兜底）
-  if(!savedBots && process.env.BOTS_CONFIG){
-    try{ savedBots = JSON.parse(process.env.BOTS_CONFIG); }catch(e){}
-  }
-  // 优先级3: __dirname 旧文件（本地开发兼容）
-  if(!savedBots){
+  // 若 /data 可用但文件不存在，尝试从旧位置迁移一次
+  if(!savedBots && DATA_DIR !== __dirname){
     var legacyFile = path.join(__dirname,'bots_config.json');
-    if(legacyFile !== CONFIG_FILE && fsSync.existsSync(legacyFile)){
+    if(fsSync.existsSync(legacyFile)){
       try{ savedBots = JSON.parse(fsSync.readFileSync(legacyFile,'utf8')); }catch(e){}
     }
   }
