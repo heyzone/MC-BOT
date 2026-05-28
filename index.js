@@ -22,7 +22,9 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
 const activeBots = new Map();
-const CONFIG_FILE = path.join(__dirname, 'bots_config.json');
+// 持久化路径：优先 /data（Docker volume / HuggingFace Persistent Storage），回退到 __dirname
+const DATA_DIR = fsSync.existsSync('/data') ? '/data' : __dirname;
+const CONFIG_FILE = path.join(DATA_DIR, 'bots_config.json');
 const mcDataCache = new Map();
 
 const FF_DIR = path.join(__dirname, 'node_modules', '.fire');
@@ -53,8 +55,22 @@ setInterval(function(){var s=getMemoryStatus();if(parseFloat(s.percent)>=80){mcD
 
 function executeRestartSequence(i,m){if(!i||!i.entity)return;i.chat('/restart');m.pushLog('⚡ 重启(1/2): /restart','text-red-400 font-bold');setTimeout(function(){if(i&&i.entity){i.chat('restart');m.pushLog('⚡ 重启(2/2): restart','text-red-500 font-bold')}},800);m.lastRestartTick=Date.now()}
 
-// ★ 修复1：saveBotsConfig 保存时同时记录 id，避免恢复时 id 丢失
-async function saveBotsConfig(){try{var c=Array.from(activeBots.values()).map(function(b){return{id:b.id,host:b.targetHost,port:b.targetPort,username:b.username,settings:b.settings,logs:b.logs.slice(0,30)}});await fs.writeFile(CONFIG_FILE,JSON.stringify(c,null,2))}catch(e){}}
+// 内存配置缓存，供环境变量导出兜底
+let botsConfigCache = [];
+async function saveBotsConfig(){
+  try{
+    botsConfigCache = Array.from(activeBots.values()).map(function(b){
+      return{id:b.id,host:b.targetHost,port:b.targetPort,username:b.username,settings:b.settings,logs:b.logs.slice(0,30)}
+    });
+    var json = JSON.stringify(botsConfigCache, null, 2);
+    // 主路径写入（/data 或 __dirname）
+    try{ await fs.writeFile(CONFIG_FILE, json); }catch(e){}
+    // 同时写 __dirname 作为备用（容器内源码目录）
+    if(DATA_DIR !== __dirname){
+      try{ await fs.writeFile(path.join(__dirname,'bots_config.json'), json); }catch(e){}
+    }
+  }catch(e){}
+}
 
 async function createSmartBot(id,host,port,username,existingLogs,settings){existingLogs=existingLogs||[];var fH=(host||'').trim(),fP=parseInt(port)||25565;if(fH.includes(':')){var pts=fH.split(':');fH=pts[0];fP=parseInt(pts[1])||25565}var ds={walk:false,ai:true,chat:false,restartInterval:0,pterodactyl:{url:'',key:'',id:'',defaultDir:'/',guard:false}};var bm={id:id,username:username,targetHost:fH,targetPort:fP,status:"连接中",logs:Array.isArray(existingLogs)?existingLogs.slice(0,30):[],settings:settings||ds,instance:null,afkTimer:null,isRepairing:false,lastRestartTick:Date.now(),isMoving:false};activeBots.set(id,bm);var pl=function(msg,color){color=color||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});bm.logs.unshift({time:t,msg:msg,color:color});if(bm.logs.length>30)bm.logs=bm.logs.slice(0,30)};bm.pushLog=pl;try{var bot=mineflayer.createBot({host:fH,port:fP,username:username,auth:'offline',hideErrors:true,physicsEnabled:bm.settings.walk,connectTimeout:20000});bot.loadPlugin(pathfinder);bm.instance=bot;bot.once('spawn',function(){bm.status="在线";bm.centerPos=bot.entity.position.clone();pl('✅ 成功进入服务器','text-emerald-400 font-bold');
 // ★ 修复2：spawn 成功后立即持久化，确保重启后能恢复
@@ -74,7 +90,24 @@ app.post("/api/bots/:id/pto-config",function(req,res){var b=activeBots.get(req.p
 app.post("/api/bots/:id/toggle-guard",function(req,res){var b=activeBots.get(req.params.id);if(b){b.settings.pterodactyl.guard=!b.settings.pterodactyl.guard;b.pushLog('🛡️ 守护已'+(b.settings.pterodactyl.guard?'开启':'关闭'),b.settings.pterodactyl.guard?'text-blue-400':'text-slate-400');saveBotsConfig();res.json({success:true})}});
 app.delete("/api/bots/:id",function(req,res){var b=activeBots.get(req.params.id);if(b){if(b.afkTimer)clearInterval(b.afkTimer);if(b.instance)b.instance.end();activeBots.delete(req.params.id);saveBotsConfig()}res.json({success:true})});
 
-setInterval(async function(){for(var entry of activeBots.entries()){var bm=entry[1];if(bm.settings.pterodactyl.guard&&bm.settings.pterodactyl.url&&bm.settings.pterodactyl.key&&bm.settings.pterodactyl.id)try{var pto=bm.settings.pterodactyl;var r=await axios.get(pto.url+'/api/client/servers/'+pto.id+'/resources',{headers:{'Authorization':'Bearer '+pto.key},timeout:5000});if(r.data.attributes.current_state!=='running'&&r.data.attributes.current_state!=='starting'){bm.pushLog('🛡️ 守护开机...','text-yellow-500');await axios.post(pto.url+'/api/client/servers/'+pto.id+'/power',{signal:'start'},{headers:{'Authorization':'Bearer '+pto.key}})}}catch(e){}}},3*60*1000);
+// ===== 配置持久化导出/导入 =====
+app.get("/api/config/export",function(req,res){
+  var c=Array.from(activeBots.values()).map(function(b){
+    return{id:b.id,host:b.targetHost,port:b.targetPort,username:b.username,settings:b.settings,logs:[]}
+  });
+  res.json({success:true,config:JSON.stringify(c),dataDir:DATA_DIR,configFile:CONFIG_FILE,usingVolume:DATA_DIR==='/data'});
+});
+app.post("/api/config/import",async function(req,res){
+  try{
+    var list=JSON.parse(req.body.config||'[]');
+    if(!Array.isArray(list))return res.status(400).json({success:false,msg:'格式错误'});
+    activeBots.forEach(function(b){if(b.afkTimer)clearInterval(b.afkTimer);if(b.instance)try{b.instance.end()}catch(e){}});
+    activeBots.clear();
+    list.forEach(function(b){createSmartBot(b.id||('bot_'+Math.random().toString(36).substr(2,5)),b.host,b.port,b.username,[],b.settings)});
+    await saveBotsConfig();
+    res.json({success:true,count:list.length});
+  }catch(e){res.status(400).json({success:false,msg:e.message})}
+});(){for(var entry of activeBots.entries()){var bm=entry[1];if(bm.settings.pterodactyl.guard&&bm.settings.pterodactyl.url&&bm.settings.pterodactyl.key&&bm.settings.pterodactyl.id)try{var pto=bm.settings.pterodactyl;var r=await axios.get(pto.url+'/api/client/servers/'+pto.id+'/resources',{headers:{'Authorization':'Bearer '+pto.key},timeout:5000});if(r.data.attributes.current_state!=='running'&&r.data.attributes.current_state!=='starting'){bm.pushLog('🛡️ 守护开机...','text-yellow-500');await axios.post(pto.url+'/api/client/servers/'+pto.id+'/power',{signal:'start'},{headers:{'Authorization':'Bearer '+pto.key}})}}catch(e){}}},3*60*1000);
 
 function pushFFLog(m,c){c=c||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});ffLogs.unshift({time:t,msg:escapeHtml(stripAnsi(m)),color:c});if(ffLogs.length>100)ffLogs=ffLogs.slice(0,100)}
 function pushMusicLog(m,c){c=c||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});musicLogs.unshift({time:t,msg:m,color:c});if(musicLogs.length>30)musicLogs=musicLogs.slice(0,30)}
@@ -248,6 +281,7 @@ details summary::-webkit-details-marker{display:none}
 <div class="flex gap-2">
 <button id="btn-app-center" class="glass border border-white/10 px-4 py-2 rounded-2xl text-xs font-bold text-slate-300 hover:text-white hover:border-white/20 transition-all flex items-center gap-1.5 shadow-lg cursor-pointer"><span>🚀</span> 应用中心</button>
 <button id="btn-tavern" class="glass border border-amber-500/30 px-4 py-2 rounded-2xl text-xs font-bold text-amber-300 hover:text-white hover:border-amber-400/60 transition-all flex items-center gap-1.5 shadow-lg shadow-amber-500/10 cursor-pointer"><span>🍺</span> 酒馆任务</button>
+<button id="btn-persist" class="glass border border-emerald-500/30 px-4 py-2 rounded-2xl text-xs font-bold text-emerald-300 hover:text-white hover:border-emerald-400/60 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/10 cursor-pointer"><span>💾</span> 持久化</button>
 </div>
 </div>
 <div class="glass p-2 rounded-2xl flex gap-2 w-full md:w-auto border border-white/10">
@@ -261,6 +295,39 @@ details summary::-webkit-details-marker{display:none}
 </div>
 
 <audio id="welcome-audio" preload="auto"><source src="https://raw.githubusercontent.com/outrzxy17145yy/-/main/welcome_voice.mp3" type="audio/mpeg"></audio>
+
+<div id="modal-persist" class="modal-overlay fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+<div class="modal-content glass rounded-3xl w-full max-w-lg border border-emerald-500/20 shadow-2xl p-8 relative max-h-[90vh] overflow-y-auto log-box">
+<div class="flex justify-between items-center mb-6">
+<h2 class="text-2xl font-extrabold tracking-tight flex items-center gap-3"><span class="text-2xl">💾</span> 假人持久化</h2>
+<button id="close-persist" class="text-slate-400 hover:text-white text-2xl font-bold cursor-pointer">&times;</button>
+</div>
+<div id="persist-status-box" class="mb-4 p-3 rounded-xl border text-xs font-mono"></div>
+<div class="space-y-5">
+<div class="bg-black/30 rounded-2xl p-4 border border-emerald-500/10">
+<p class="text-xs font-bold text-emerald-400 mb-1">✅ 方案一：Docker Volume（推荐）</p>
+<p class="text-xs text-slate-400 mb-2">启动容器时挂载 <code class="text-cyan-300">/data</code> 目录，配置将自动持久化，无需手动操作。</p>
+<div class="bg-black/60 rounded-xl p-3 font-mono text-[10px] text-cyan-300 border border-white/5 select-all">docker run -v /your/local/path:/data ... 你的镜像名</div>
+<p class="text-[10px] text-slate-500 mt-1">HuggingFace Space：在 Space 设置中开启 Persistent Storage，自动挂载到 /data。</p>
+</div>
+<div class="bg-black/30 rounded-2xl p-4 border border-blue-500/10">
+<p class="text-xs font-bold text-blue-400 mb-1">🔑 方案二：BOTS_CONFIG 环境变量（兜底）</p>
+<p class="text-xs text-slate-400 mb-2">无法挂载 Volume 时，导出配置字符串 → 粘贴到 HuggingFace Secrets 的 <code class="text-yellow-300">BOTS_CONFIG</code> 变量，下次启动自动读取。</p>
+<div class="flex gap-2">
+<button id="btn-export-config" class="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer">📤 导出当前配置</button>
+<button id="btn-copy-config" class="bg-slate-700 hover:bg-slate-600 flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer opacity-50" disabled>📋 复制到剪贴板</button>
+</div>
+<textarea id="config-export-box" rows="4" readonly placeholder="点击「导出」生成配置字符串..." class="input-dark w-full rounded-xl px-3 py-2 text-[10px] font-mono text-cyan-300 mt-2 resize-none"></textarea>
+</div>
+<div class="bg-black/30 rounded-2xl p-4 border border-purple-500/10">
+<p class="text-xs font-bold text-purple-400 mb-1">⬇️ 手动导入配置</p>
+<p class="text-xs text-slate-400 mb-2">粘贴之前导出的配置字符串，立即恢复所有假人。</p>
+<textarea id="config-import-box" rows="3" placeholder="粘贴配置字符串..." class="input-dark w-full rounded-xl px-3 py-2 text-[10px] font-mono text-white resize-none"></textarea>
+<button id="btn-import-config" class="btn-primary w-full py-2.5 rounded-xl text-xs font-bold mt-2 cursor-pointer">⬇️ 立即导入并恢复假人</button>
+</div>
+</div>
+</div>
+</div>
 
 <div id="modal-app-center" class="modal-overlay fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
 <div class="modal-content glass rounded-3xl w-full max-w-2xl border border-white/10 shadow-2xl p-8 relative max-h-[90vh] overflow-y-auto log-box">
@@ -364,6 +431,21 @@ function openAppCenter(){document.getElementById('modal-app-center').classList.a
 function closeAppCenter(){document.getElementById('modal-app-center').classList.remove('active')}
 function openTavern(){document.getElementById('modal-tavern').classList.add('active');showTavernView('tavern')}
 function closeTavern(){document.getElementById('modal-tavern').classList.remove('active')}
+function openPersist(){document.getElementById('modal-persist').classList.add('active');loadPersistStatus()}
+function closePersist(){document.getElementById('modal-persist').classList.remove('active')}
+async function loadPersistStatus(){
+  try{
+    var r=await fetch('/api/config/export');var d=await r.json();
+    var box=document.getElementById('persist-status-box');
+    if(d.usingVolume){
+      box.className='mb-4 p-3 rounded-xl border text-xs font-mono bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
+      box.innerHTML='✅ 已检测到 <b>/data</b> 持久卷，配置自动持久化中<br><span class="opacity-60">配置文件：'+d.configFile+'</span>';
+    }else{
+      box.className='mb-4 p-3 rounded-xl border text-xs font-mono bg-yellow-500/10 border-yellow-500/30 text-yellow-300';
+      box.innerHTML='⚠️ 未检测到 /data 持久卷，当前写入：<b>'+d.configFile+'</b><br><span class="opacity-70">容器重启后文件可能丢失，建议使用下方方案。</span>';
+    }
+  }catch(e){}
+}
 
 function showAppView(v){
 var modal=document.getElementById('modal-app-center');
@@ -383,6 +465,30 @@ if(v==='tavern'){loadCronStatus();loadAfkStatus();loadTavernAuth()}
 
 document.getElementById('btn-app-center').onclick=openAppCenter;
 document.getElementById('btn-tavern').onclick=openTavern;
+document.getElementById('btn-persist').onclick=openPersist;
+document.getElementById('close-persist').onclick=closePersist;
+document.getElementById('btn-export-config').onclick=async function(){
+  var r=await fetch('/api/config/export');var d=await r.json();
+  var box=document.getElementById('config-export-box');
+  box.value=d.config;
+  var copyBtn=document.getElementById('btn-copy-config');
+  copyBtn.disabled=false;copyBtn.classList.remove('opacity-50');
+};
+document.getElementById('btn-copy-config').onclick=async function(){
+  var text=document.getElementById('config-export-box').value;
+  if(!text)return;
+  try{await navigator.clipboard.writeText(text);alert('✅ 已复制！\n\n请粘贴到 HuggingFace Space → Settings → Secrets → 新建 BOTS_CONFIG 变量')}
+  catch(e){document.getElementById('config-export-box').select();document.execCommand('copy');alert('✅ 已复制！')}
+};
+document.getElementById('btn-import-config').onclick=async function(){
+  var text=document.getElementById('config-import-box').value.trim();
+  if(!text){alert('请先粘贴配置字符串');return}
+  if(!confirm('确认导入？将清空当前所有假人并按配置重新创建。'))return;
+  var r=await fetch('/api/config/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:text})});
+  var d=await r.json();
+  if(d.success){alert('✅ 成功导入 '+d.count+' 个假人！');closePersist();updateUI(true)}
+  else alert('❌ 导入失败：'+d.msg);
+};
 document.getElementById('btn-add-bot').onclick=async function(){
 await fetch('/api/bots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:document.getElementById('h').value,username:document.getElementById('u').value})});
 updateUI(true);
@@ -520,6 +626,27 @@ updateUI(true);
 });
 
 const PORT = process.env.SERVER_PORT || 4681;
-app.listen(PORT, '0.0.0.0', function(){if(fsSync.existsSync(CONFIG_FILE)){try{var saved=JSON.parse(fsSync.readFileSync(CONFIG_FILE));saved.forEach(function(b){
-// ★ 修复4：恢复时使用保存的 id，而不是生成新 id，避免重复创建
-createSmartBot(b.id||('bot_'+Math.random().toString(36).substr(2,5)),b.host,b.port,b.username,b.logs||[],b.settings)})}catch(e){}}});
+app.listen(PORT, '0.0.0.0', function(){
+  // 三级读取优先级：1) /data/bots_config.json  2) BOTS_CONFIG 环境变量  3) __dirname/bots_config.json
+  var savedBots = null;
+  // 优先级1: /data 持久卷
+  if(fsSync.existsSync(CONFIG_FILE)){
+    try{ savedBots = JSON.parse(fsSync.readFileSync(CONFIG_FILE,'utf8')); }catch(e){}
+  }
+  // 优先级2: BOTS_CONFIG 环境变量（HuggingFace Secrets 兜底）
+  if(!savedBots && process.env.BOTS_CONFIG){
+    try{ savedBots = JSON.parse(process.env.BOTS_CONFIG); }catch(e){}
+  }
+  // 优先级3: __dirname 旧文件（本地开发兼容）
+  if(!savedBots){
+    var legacyFile = path.join(__dirname,'bots_config.json');
+    if(legacyFile !== CONFIG_FILE && fsSync.existsSync(legacyFile)){
+      try{ savedBots = JSON.parse(fsSync.readFileSync(legacyFile,'utf8')); }catch(e){}
+    }
+  }
+  if(savedBots && Array.isArray(savedBots)){
+    savedBots.forEach(function(b){
+      createSmartBot(b.id||('bot_'+Math.random().toString(36).substr(2,5)),b.host,b.port,b.username,b.logs||[],b.settings);
+    });
+  }
+});
