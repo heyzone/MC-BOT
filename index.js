@@ -451,36 +451,47 @@ if(v==='afk')loadAfkStatus();
 if(v==='tavern'){loadCronStatus();loadAfkStatus();loadTavernAuth()}
 }
 
-document.getElementById('btn-app-center').onclick=openAppCenter;
-document.getElementById('btn-tavern').onclick=openTavern;
-document.getElementById('btn-persist').onclick=openPersist;
-document.getElementById('close-persist').onclick=closePersist;
-document.getElementById('btn-export-config').onclick=async function(){
+// 部署角色按钮——独立绑定，不受其他任何初始化影响
+(function(){
+  var btn=document.getElementById('btn-add-bot');
+  if(btn)btn.onclick=async function(){
+    var h=document.getElementById('h');
+    var u=document.getElementById('u');
+    await fetch('/api/bots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:h?h.value:'',username:u?u.value:''})});
+    updateUI(true);
+  };
+})();
+
+var _el=function(id){return document.getElementById(id)};
+var _on=function(id,fn){var el=_el(id);if(el)el.onclick=fn};
+_on('btn-app-center',openAppCenter);
+_on('btn-tavern',openTavern);
+_on('btn-persist',openPersist);
+_on('close-persist',closePersist);
+_on('btn-export-config',async function(){
   var r=await fetch('/api/config/export');var d=await r.json();
-  var box=document.getElementById('config-export-box');
-  box.value=d.config;
-  var copyBtn=document.getElementById('btn-copy-config');
-  copyBtn.disabled=false;copyBtn.classList.remove('opacity-50');
-};
-document.getElementById('btn-copy-config').onclick=async function(){
-  var text=document.getElementById('config-export-box').value;
+  var box=_el('config-export-box');
+  if(box)box.value=d.config;
+  var copyBtn=_el('btn-copy-config');
+  if(copyBtn){copyBtn.disabled=false;copyBtn.classList.remove('opacity-50')}
+});
+_on('btn-copy-config',async function(){
+  var box=_el('config-export-box');
+  var text=box?box.value:'';
   if(!text)return;
-  try{await navigator.clipboard.writeText(text);alert('✅ 已复制！\n\n请粘贴到 HuggingFace Space → Settings → Secrets → 新建 BOTS_CONFIG 变量')}
-  catch(e){document.getElementById('config-export-box').select();document.execCommand('copy');alert('✅ 已复制！')}
-};
-document.getElementById('btn-import-config').onclick=async function(){
-  var text=document.getElementById('config-import-box').value.trim();
+  try{await navigator.clipboard.writeText(text);alert('✅ 已复制！')}
+  catch(e){if(box){box.select();document.execCommand('copy');alert('✅ 已复制！')}}
+});
+_on('btn-import-config',async function(){
+  var box=_el('config-import-box');
+  var text=box?box.value.trim():'';
   if(!text){alert('请先粘贴配置字符串');return}
   if(!confirm('确认导入？将清空当前所有假人并按配置重新创建。'))return;
   var r=await fetch('/api/config/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:text})});
   var d=await r.json();
   if(d.success){alert('✅ 成功导入 '+d.count+' 个假人！');closePersist();updateUI(true)}
   else alert('❌ 导入失败：'+d.msg);
-};
-document.getElementById('btn-add-bot').onclick=async function(){
-await fetch('/api/bots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:document.getElementById('h').value,username:document.getElementById('u').value})});
-updateUI(true);
-};
+});
 
 document.getElementById('modal-app-center').addEventListener('click',function(e){
 var t=e.target.closest('.nav-ff');if(t){showAppView('ff');return}
