@@ -54,15 +54,95 @@ setInterval(function(){var s=getMemoryStatus();if(parseFloat(s.percent)>=80){mcD
 function executeRestartSequence(i,m){if(!i||!i.entity)return;i.chat('/restart');m.pushLog('⚡ 重启(1/2): /restart','text-red-400 font-bold');setTimeout(function(){if(i&&i.entity){i.chat('restart');m.pushLog('⚡ 重启(2/2): restart','text-red-500 font-bold')}},800);m.lastRestartTick=Date.now()}
 
 async function saveBotsConfig(){try{var c=Array.from(activeBots.values()).map(function(b){return{host:b.targetHost,port:b.targetPort,username:b.username,settings:b.settings,logs:b.logs.slice(0,30)}});await fs.writeFile(CONFIG_FILE,JSON.stringify(c,null,2))}catch(e){}}
-async function createSmartBot(id,host,port,username,existingLogs,settings){existingLogs=existingLogs||[];var fH=(host||'').trim(),fP=parseInt(port)||25565;if(fH.includes(':')){var pts=fH.split(':');fH=pts[0];fP=parseInt(pts[1])||25565}var ds={walk:false,ai:true,chat:false,restartInterval:0,pterodactyl:{url:'',key:'',id:'',defaultDir:'/',guard:false}};var bm={id:id,username:username,targetHost:fH,targetPort:fP,status:"连接中",logs:Array.isArray(existingLogs)?existingLogs.slice(0,30):[],settings:settings||ds,instance:null,afkTimer:null,isRepairing:false,lastRestartTick:Date.now(),isMoving:false};activeBots.set(id,bm);var pl=function(msg,color){color=color||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});bm.logs.unshift({time:t,msg:msg,color:color});if(bm.logs.length>30)bm.logs=bm.logs.slice(0,30)};bm.pushLog=pl;try{var bot=mineflayer.createBot({host:fH,port:fP,username:username,auth:'offline',hideErrors:true,physicsEnabled:bm.settings.walk,connectTimeout:20000});bot.loadPlugin(pathfinder);bm.instance=bot;bot.once('spawn',function(){bm.status="在线";bm.centerPos=bot.entity.position.clone();pl('✅ 成功进入服务器','text-emerald-400 font-bold');var mcD;try{mcD=mcDataCache.get(bot.version)||require('minecraft-data')(bot.version);if(mcD)mcDataCache.set(bot.version,mcD)}catch(e){pl('❌ 协议不支持','text-red-500');return bot.end()}var mv=new Movements(bot,mcD);mv.canDig=false;bot.pathfinder.setMovements(mv);setTimeout(function(){if(bot.entity){bot.chat("诸君 我喜欢萝莉！");pl('📣 进服宣言: 诸君 我喜欢萝莉！','text-purple-400 font-bold')}},2000);bot.on('chat',function(sender,message){if(sender===bot.username||!bm.settings.chat)return;var k=["机器人","脚本","挂机",bot.username,"有人","在吗"];if(k.some(function(k2){return message.includes(k2)})&&Math.random()>.4)setTimeout(function(){if(bot.entity){var r=generateNaturalChat('interaction');bot.chat(r);pl('🗨️ 回嘴: ['+sender+'] -> '+r,'text-pink-400 font-bold')}},1500+Math.random()*2000)});if(bm.afkTimer)clearInterval(bm.afkTimer);bm.afkTimer=setInterval(function(){if(!bot.entity)return;if(bm.settings.restartInterval>0&&(Date.now()-bm.lastRestartTick)/60000>=bm.settings.restartInterval)executeRestartSequence(bot,bm);if(bm.settings.ai&&!bm.isMoving){var t2=bot.nearestEntity(function(p){return p.type==='player'});if(t2)bot.lookAt(t2.position.offset(0,1.6,0))}if(bm.settings.walk&&!bm.isMoving&&Math.random()>.7){bm.isMoving=true;var tp=bm.centerPos.offset((Math.random()-.5)*12,0,(Math.random()-.5)*12);pl('👣 巡逻: ['+Math.round(tp.x)+', '+Math.round(tp.z)+']','text-emerald-500');bot.pathfinder.setGoal(new goals.GoalNear(tp.x,tp.y,tp.z,1))}if(bm.settings.chat&&Math.random()>.92){var m2=generateNaturalChat('idle');bot.chat(m2);pl('💬 发话: '+m2,'text-orange-400')}},8000)});bot.on('goal_reached',function(){bm.isMoving=false});bot.once('end',function(){attemptRepair(id,bm,"断开")});bot.on('error',function(e){attemptRepair(id,bm,e.code||"ERR")})}catch(err){attemptRepair(id,bm,"失败")}}
-function attemptRepair(id,bm){if(!activeBots.has(id)||bm.isRepairing)return;bm.isRepairing=true;bm.status="重连中";if(bm.instance){bm.instance.removeAllListeners();try{bm.instance.end()}catch(e){}bm.instance=null}if(bm.afkTimer)clearInterval(bm.afkTimer);setTimeout(function(){if(!activeBots.has(id))return;bm.isRepairing=false;createSmartBot(id,bm.targetHost,bm.targetPort,bm.username,bm.logs,bm.settings)},10000)}
+
+// ============================================================
+// BUG FIX 1: createSmartBot 现在正确设置 bm.id
+// BUG FIX 2: 进服发言改为无害内容
+// ============================================================
+async function createSmartBot(id,host,port,username,existingLogs,settings){
+  existingLogs=existingLogs||[];
+  var fH=(host||'').trim(), fP=parseInt(port)||25565;
+  if(fH.includes(':')){var pts=fH.split(':');fH=pts[0];fP=parseInt(pts[1])||25565}
+  var ds={walk:false,ai:true,chat:false,restartInterval:0,pterodactyl:{url:'',key:'',id:'',defaultDir:'/',guard:false}};
+  var bm={
+    id:id,  // FIX: 确保 id 正确赋值到 bm 对象
+    username:username,
+    targetHost:fH,
+    targetPort:fP,
+    status:"连接中",
+    logs:Array.isArray(existingLogs)?existingLogs.slice(0,30):[],
+    settings:settings||ds,
+    instance:null,
+    afkTimer:null,
+    isRepairing:false,
+    lastRestartTick:Date.now(),
+    isMoving:false
+  };
+  activeBots.set(id,bm);
+  var pl=function(msg,color){color=color||'';var t=new Date().toLocaleTimeString('zh-CN',{hour12:false});bm.logs.unshift({time:t,msg:msg,color:color});if(bm.logs.length>30)bm.logs=bm.logs.slice(0,30)};
+  bm.pushLog=pl;
+  try{
+    var bot=mineflayer.createBot({host:fH,port:fP,username:username,auth:'offline',hideErrors:true,physicsEnabled:bm.settings.walk,connectTimeout:20000});
+    bot.loadPlugin(pathfinder);
+    bm.instance=bot;
+    bot.once('spawn',function(){
+      bm.status="在线";
+      bm.centerPos=bot.entity.position.clone();
+      pl('✅ 成功进入服务器','text-emerald-400 font-bold');
+      var mcD;
+      try{mcD=mcDataCache.get(bot.version)||require('minecraft-data')(bot.version);if(mcD)mcDataCache.set(bot.version,mcD)}catch(e){pl('❌ 协议不支持','text-red-500');return bot.end()}
+      var mv=new Movements(bot,mcD);mv.canDig=false;bot.pathfinder.setMovements(mv);
+      // FIX: 进服发言改为无害内容
+      setTimeout(function(){if(bot.entity){bot.chat("大家好~");pl('📣 进服发言: 大家好~','text-purple-400 font-bold')}},2000);
+      bot.on('chat',function(sender,message){
+        if(sender===bot.username||!bm.settings.chat)return;
+        var k=["机器人","脚本","挂机",bot.username,"有人","在吗"];
+        if(k.some(function(k2){return message.includes(k2)})&&Math.random()>.4)
+          setTimeout(function(){if(bot.entity){var r=generateNaturalChat('interaction');bot.chat(r);pl('🗨️ 回嘴: ['+sender+'] -> '+r,'text-pink-400 font-bold')}},1500+Math.random()*2000)
+      });
+      if(bm.afkTimer)clearInterval(bm.afkTimer);
+      bm.afkTimer=setInterval(function(){
+        if(!bot.entity)return;
+        if(bm.settings.restartInterval>0&&(Date.now()-bm.lastRestartTick)/60000>=bm.settings.restartInterval)executeRestartSequence(bot,bm);
+        if(bm.settings.ai&&!bm.isMoving){var t2=bot.nearestEntity(function(p){return p.type==='player'});if(t2)bot.lookAt(t2.position.offset(0,1.6,0))}
+        if(bm.settings.walk&&!bm.isMoving&&Math.random()>.7){bm.isMoving=true;var tp=bm.centerPos.offset((Math.random()-.5)*12,0,(Math.random()-.5)*12);pl('👣 巡逻: ['+Math.round(tp.x)+', '+Math.round(tp.z)+']','text-emerald-500');bot.pathfinder.setGoal(new goals.GoalNear(tp.x,tp.y,tp.z,1))}
+        if(bm.settings.chat&&Math.random()>.92){var m2=generateNaturalChat('idle');bot.chat(m2);pl('💬 发话: '+m2,'text-orange-400')}
+      },8000)
+    });
+    bot.on('goal_reached',function(){bm.isMoving=false});
+    bot.once('end',function(){attemptRepair(id,bm,"断开")});
+    bot.on('error',function(e){attemptRepair(id,bm,e.code||"ERR")})
+  }catch(err){attemptRepair(id,bm,"失败")}
+}
+
+function attemptRepair(id,bm){
+  if(!activeBots.has(id)||bm.isRepairing)return;
+  bm.isRepairing=true;bm.status="重连中";
+  if(bm.instance){bm.instance.removeAllListeners();try{bm.instance.end()}catch(e){}bm.instance=null}
+  if(bm.afkTimer)clearInterval(bm.afkTimer);
+  setTimeout(function(){if(!activeBots.has(id))return;bm.isRepairing=false;createSmartBot(id,bm.targetHost,bm.targetPort,bm.username,bm.logs,bm.settings)},10000)
+}
 
 app.post("/api/bots/:id/restart-now",function(req,res){var b=activeBots.get(req.params.id);if(b&&b.instance){executeRestartSequence(b.instance,b);res.json({success:true})}else res.status(404).json({success:false})});
 app.post("/api/bots/:id/toggle",function(req,res){var b=activeBots.get(req.params.id);if(b){var t=req.body.type;b.settings[t]=!b.settings[t];var l=t==='ai'?'👁️ AI':(t==='walk'?'👣 巡逻':'💬 喊话');b.pushLog('⚙️ '+l+' 已'+(b.settings[t]?'开启':'关闭'),b.settings[t]?'text-blue-400':'text-slate-400');if(t==='walk'&&b.instance){b.instance.physicsEnabled=b.settings.walk;if(!b.settings.walk){b.instance.pathfinder.setGoal(null);b.isMoving=false}}saveBotsConfig();res.json({success:true})}});
 app.post("/api/bots/:id/upload",upload.single('file'),async function(req,res){var b=activeBots.get(req.params.id);if(!b||!b.settings.pterodactyl.url||!req.file)return res.status(400).json({success:false});var pto=b.settings.pterodactyl;b.pushLog('🚀 同步: '+req.file.originalname,'text-blue-400');try{var r=await axios.get(pto.url+'/api/client/servers/'+pto.id+'/files/upload',{headers:{'Authorization':'Bearer '+pto.key}});var f=new FormData();f.append('files',req.file.buffer,req.file.originalname);await axios.post(r.data.attributes.url+'&directory='+encodeURIComponent(pto.defaultDir),f,{headers:Object.assign({},f.getHeaders())});b.pushLog('✅ 同步成功','text-emerald-400');res.json({success:true})}catch(e){b.pushLog('❌ 同步失败','text-red-500');res.status(500).json({success:false})}});
 app.get("/api/system/status",function(req,res){res.json(getMemoryStatus())});
 app.get("/api/bots",function(req,res){res.json({bots:Array.from(activeBots.values()).map(function(b){return{id:b.id,username:b.username,host:b.targetHost,port:b.targetPort,status:b.status,logs:b.logs,settings:b.settings,nextRestart:b.settings.restartInterval>0?new Date(b.lastRestartTick+b.settings.restartInterval*60000).toLocaleTimeString():'未开启'}})})});
-app.post("/api/bots",function(req,res){createSmartBot('bot_'+Math.random().toString(36).substr(2,7),req.body.host,25565,req.body.username);res.json({success:true})});
+
+// ============================================================
+// BUG FIX 3: /api/bots POST 正确解析 host:port，并返回 bot id
+// ============================================================
+app.post("/api/bots",function(req,res){
+  var rawHost = (req.body.host||'').trim();
+  var username = (req.body.username||'').trim();
+  if(!rawHost||!username) return res.status(400).json({success:false,msg:'请填写IP和角色名'});
+  var fH=rawHost, fP=25565;
+  if(rawHost.includes(':')){var pts=rawHost.split(':');fH=pts[0];fP=parseInt(pts[1])||25565}
+  var newId='bot_'+Math.random().toString(36).substr(2,7);
+  createSmartBot(newId,fH,fP,username,[],null);
+  res.json({success:true,id:newId});
+});
+
 app.post("/api/bots/:id/set-timer",function(req,res){var b=activeBots.get(req.params.id);if(b){var v=parseFloat(req.body.value)||0;b.settings.restartInterval=req.body.unit==='hour'?Math.round(v*60):Math.round(v);b.lastRestartTick=Date.now();b.pushLog('⏰ 每 '+v+(req.body.unit==='hour'?'小时':'分钟')+' 重启','text-cyan-400');saveBotsConfig();res.json({success:true})}});
 app.post("/api/bots/:id/pto-config",function(req,res){var b=activeBots.get(req.params.id);if(b){b.settings.pterodactyl=Object.assign({},b.settings.pterodactyl,{url:(req.body.url||"").replace(/\/$/,""),key:req.body.key||"",id:req.body.id||"",defaultDir:req.body.defaultDir||'/'});b.pushLog('🔑 翼龙凭据已更新','text-purple-400');saveBotsConfig();res.json({success:true})}});
 app.post("/api/bots/:id/toggle-guard",function(req,res){var b=activeBots.get(req.params.id);if(b){b.settings.pterodactyl.guard=!b.settings.pterodactyl.guard;b.pushLog('🛡️ 守护已'+(b.settings.pterodactyl.guard?'开启':'关闭'),b.settings.pterodactyl.guard?'text-blue-400':'text-slate-400');saveBotsConfig();res.json({success:true})}});
@@ -98,17 +178,14 @@ app.post("/api/apps/firefox/start",async function(req,res){
 app.post("/api/apps/firefox/stop",function(req,res){pushFFLog('⏸️ 停止...','text-orange-400');exec('pkill -f ff_lite.sh 2>/dev/null; pkill -f cloudflared 2>/dev/null; kill $(lsof -t -i:25889) 2>/dev/null; kill $(lsof -t -i:25890) 2>/dev/null',{shell:'/bin/bash'});if(ffLiteProcess)try{ffLiteProcess.kill()}catch(e){};if(cfTunnelProcess)try{cfTunnelProcess.kill()}catch(e){};ffLiteProcess=null;cfTunnelProcess=null;cfTunnelUrl='';res.json({success:true})});
 app.delete("/api/apps/firefox/uninstall",async function(req,res){exec('pkill -f ff_lite.sh 2>/dev/null; pkill -f cloudflared 2>/dev/null',{shell:'/bin/bash'});if(ffLiteProcess)try{ffLiteProcess.kill()}catch(e){};if(cfTunnelProcess)try{cfTunnelProcess.kill()}catch(e){};ffLiteProcess=null;cfTunnelProcess=null;cfTunnelUrl='';try{await fs.rm(FF_DIR,{recursive:true,force:true});pushFFLog('🗑️ 已清空','text-red-400');res.json({success:true})}catch(e){res.status(500).json({success:false})}});
 
-// ===== 音乐加速 (绕过sb.sh + 自动检测节点 + 提取API) =====
+// ===== 音乐加速 =====
 var SUB_FILE = path.join(MUSIC_DIR, 'sub_cache', 'sub.txt');
-
 app.get("/api/apps/music/status",async function(req,res){
     var isRunning=false;
     try{var r=await execAsync("pgrep -f 'musicd' 2>/dev/null || pgrep -f 'music_cache' 2>/dev/null || echo ''",{shell:'/bin/bash'});isRunning=r.stdout.trim().length>0}catch(e){}
     var hasNodes=fsSync.existsSync(SUB_FILE);
     res.json({installed:fsSync.existsSync(MUSIC_DIR),running:isRunning,hasNodes:hasNodes,logs:musicLogs})
 });
-
-// 提取节点 API
 app.get("/api/apps/music/nodes",function(req,res){
     try{
         if(!fsSync.existsSync(SUB_FILE))return res.json({success:false,nodes:''});
@@ -116,18 +193,15 @@ app.get("/api/apps/music/nodes",function(req,res){
         res.json({success:true,nodes:content})
     }catch(e){res.json({success:false,nodes:''})}
 });
-
 app.post("/api/apps/music/start",async function(req,res){
     if(!fsSync.existsSync(MUSIC_DIR))fsSync.mkdirSync(MUSIC_DIR,{recursive:true});
     var params=req.body.params||{};
     var env=Object.assign({},process.env,{SERVER_PORT:'3001',PORT:'3001',FILE_PATH:path.join(MUSIC_DIR,'sub_cache'),UPLOAD_URL:'',PROJECT_URL:'',AUTO_ACCESS:'false'});
     ['UUID','ARGO_DOMAIN','ARGO_AUTH','ARGO_PORT','NEZHA_SERVER','NEZHA_PORT','NEZHA_KEY','CFIP','CFPORT','NAME'].forEach(function(k){if(params[k])env[k]=params[k]});
     env.PATH=MUSIC_DIR+':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:'+(process.env.PATH||'');
-    
     try{
         pushMusicLog('🚀 启动音乐服务...','text-blue-400 font-bold');
         var musicdPath=path.join(MUSIC_DIR,'musicd');
-        
         if(!fsSync.existsSync(musicdPath)){
             pushMusicLog('⬇️ 下载音乐资源...','text-blue-400 font-bold');
             var arch='amd64';
@@ -147,31 +221,19 @@ app.post("/api/apps/music/start",async function(req,res){
                 try{await execAsync("pkill -f 'sbx' 2>/dev/null || true",{shell:'/bin/bash'})}catch(e3){}
             }
         }
-        
         if(!fsSync.existsSync(musicdPath)){pushMusicLog('❌ 音乐服务启动失败: 核心文件缺失','text-red-500 font-bold');return res.status(500).json({success:false})}
-        
         musicProcess=spawn('./musicd',{cwd:MUSIC_DIR,env:env,stdio:['pipe','pipe','pipe']});
         musicProcess.stdout.on('data',function(){});musicProcess.stderr.on('data',function(){});
         musicProcess.on('close',function(){musicProcess=null});musicProcess.on('error',function(){pushMusicLog('❌ 音乐服务异常','text-red-500 font-bold')});
-        
         pushMusicLog('🎵 进程已伪装 节点生成中...','text-cyan-400 font-bold');
-        
-        // 启动后轮询检测节点文件生成
         var checkCount=0;
         var nodeCheckTimer=setInterval(function(){
             checkCount++;
             if(fsSync.existsSync(SUB_FILE)){
-                try{
-                    var content=fsSync.readFileSync(SUB_FILE,'utf8').trim();
-                    if(content.length>10){
-                        clearInterval(nodeCheckTimer);
-                        pushMusicLog('✅ 节点已生成！请主人复制！','text-emerald-400 font-bold');
-                    }
-                }catch(e){}
+                try{var content=fsSync.readFileSync(SUB_FILE,'utf8').trim();if(content.length>10){clearInterval(nodeCheckTimer);pushMusicLog('✅ 节点已生成！请主人复制！','text-emerald-400 font-bold')}}catch(e){}
             }
             if(checkCount>=30){clearInterval(nodeCheckTimer);if(!fsSync.existsSync(SUB_FILE))pushMusicLog('⚠️ 节点文件未检测到，请检查配置','text-yellow-400')}
         },2000);
-        
         res.json({success:true})
     }catch(err){pushMusicLog('❌ 音乐服务启动失败','text-red-500 font-bold');res.status(500).json({success:false})}
 });
@@ -219,6 +281,7 @@ details summary::-webkit-details-marker{display:none}
 .modal-content{transform:scale(.95);transition:transform .3s}.modal-overlay.active .modal-content{transform:scale(1)}
 .view-section{display:none}.view-section.active-view{display:block;animation:fadeIn .2s}
 @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.btn-loading{opacity:.6;cursor:not-allowed;pointer-events:none}
 </style>
 </head>
 <body class="p-4 md:p-8 pb-24">
@@ -245,7 +308,7 @@ details summary::-webkit-details-marker{display:none}
 </div>
 </div>
 <div class="glass p-2 rounded-2xl flex gap-2 w-full md:w-auto border border-white/10">
-<input id="h" placeholder="IP:PORT" class="input-dark rounded-xl px-4 py-2.5 text-sm text-white flex-1 md:w-48">
+<input id="h" placeholder="IP:端口" class="input-dark rounded-xl px-4 py-2.5 text-sm text-white flex-1 md:w-48">
 <input id="u" placeholder="角色名" class="input-dark rounded-xl px-4 py-2.5 text-sm text-white md:w-36">
 <button id="btn-add-bot" class="btn-primary text-white px-6 py-2.5 rounded-xl text-sm font-bold active:scale-95 cursor-pointer">部署角色</button>
 </div>
@@ -253,8 +316,6 @@ details summary::-webkit-details-marker{display:none}
 </div>
 <div id="mem-bar" class="fixed bottom-6 right-6 p-4 glass rounded-2xl flex items-center gap-4 z-40 shadow-2xl border border-white/10"><div class="flex flex-col items-center justify-center"><span id="mem-percent" class="text-xl font-black text-white tracking-tight">0.0%</span><span class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">RAM</span></div><div class="w-28 h-2 bg-slate-800 rounded-full overflow-hidden shadow-inner"><div id="mem-progress" class="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-700 rounded-full" style="width:0%"></div></div></div>
 </div>
-
-<audio id="welcome-audio" preload="auto"><source src="https://raw.githubusercontent.com/outrzxy17145yy/-/main/welcome_voice.mp3" type="audio/mpeg"></audio>
 
 <div id="modal-app-center" class="modal-overlay fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
 <div class="modal-content glass rounded-3xl w-full max-w-2xl border border-white/10 shadow-2xl p-8 relative max-h-[90vh] overflow-y-auto log-box">
@@ -376,9 +437,37 @@ if(v==='tavern'){loadCronStatus();loadAfkStatus();loadTavernAuth()}
 
 document.getElementById('btn-app-center').onclick=openAppCenter;
 document.getElementById('btn-tavern').onclick=openTavern;
+
+// ============================================================
+// FIX: 部署角色按钮 — 增加输入校验、loading 状态、错误提示
+// ============================================================
 document.getElementById('btn-add-bot').onclick=async function(){
-await fetch('/api/bots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:document.getElementById('h').value,username:document.getElementById('u').value})});
-updateUI(true);
+var btn=this;
+var host=document.getElementById('h').value.trim();
+var user=document.getElementById('u').value.trim();
+if(!host||!user){
+  btn.textContent='⚠️ 请填写完整';
+  btn.classList.add('btn-loading');
+  setTimeout(function(){btn.textContent='部署角色';btn.classList.remove('btn-loading')},1500);
+  return;
+}
+btn.textContent='⏳ 部署中...';
+btn.classList.add('btn-loading');
+try{
+  var r=await fetch('/api/bots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,username:user})});
+  var d=await r.json();
+  if(d.success){
+    btn.textContent='✅ 已部署';
+    document.getElementById('h').value='';
+    document.getElementById('u').value='';
+    setTimeout(function(){updateUI(true)},300);
+  }else{
+    btn.textContent='❌ '+(d.msg||'失败');
+  }
+}catch(e){
+  btn.textContent='❌ 网络错误';
+}
+setTimeout(function(){btn.textContent='部署角色';btn.classList.remove('btn-loading')},2000);
 };
 
 document.getElementById('modal-app-center').addEventListener('click',function(e){
@@ -406,7 +495,6 @@ await fetch('/api/apps/music/start',{method:'POST',headers:{'Content-Type':'appl
 document.getElementById('music-btn-stop').onclick=async function(){await fetch('/api/apps/music/stop',{method:'POST'});loadMusicStatus()};
 document.getElementById('music-btn-uninstall').onclick=async function(){if(!confirm('确认卸载？'))return;await fetch('/api/apps/music/uninstall',{method:'DELETE'});loadMusicStatus()};
 
-// 提取节点按钮
 document.getElementById('music-btn-copy').onclick=async function(){
 try{
 var r=await fetch('/api/apps/music/nodes');
@@ -456,7 +544,6 @@ if(e.target.type==='file'&&e.target.dataset.botid)uploadFile(e.target.dataset.bo
 
 async function loadFFStatus(){try{var r=await fetch('/api/apps/firefox/status');var d=await r.json();var R=d.running;document.getElementById('ff-btn-start').className='toggle-btn '+(R?'off opacity-50':'bg-emerald-600/90 shadow-lg shadow-emerald-500/30 text-white')+' py-2.5 rounded-xl text-xs font-bold cursor-pointer';document.getElementById('ff-btn-stop').className='toggle-btn '+(R?'bg-orange-600/90 shadow-lg shadow-orange-500/30 text-white':'off opacity-50')+' py-2.5 rounded-xl text-xs font-bold cursor-pointer';if(d.url){document.getElementById('ff-url-box').classList.remove('hidden');document.getElementById('ff-url-link').href=d.url;document.getElementById('ff-url-link').innerHTML='🔗 '+d.url}else{document.getElementById('ff-url-box').classList.add('hidden')}document.getElementById('ff-log-box').innerHTML=renderLogs(d.logs)}catch(e){}}
 async function loadMusicStatus(){try{var r=await fetch('/api/apps/music/status');var d=await r.json();var R=d.running;document.getElementById('music-btn-start').className='toggle-btn '+(R?'off opacity-50':'bg-emerald-600/90 shadow-lg shadow-emerald-500/30 text-white')+' py-2.5 rounded-xl text-xs font-bold cursor-pointer';document.getElementById('music-btn-stop').className='toggle-btn '+(R?'bg-orange-600/90 shadow-lg shadow-orange-500/30 text-white':'off opacity-50')+' py-2.5 rounded-xl text-xs font-bold cursor-pointer';
-// 提取按钮状态
 var copyBtn=document.getElementById('music-btn-copy');
 if(d.hasNodes){copyBtn.style.opacity='1';copyBtn.className='bg-indigo-600/90 shadow-lg shadow-indigo-500/30 text-white py-2.5 rounded-xl text-xs font-bold cursor-pointer'}
 else{copyBtn.style.opacity='0.5';copyBtn.className='bg-slate-700 text-slate-400 py-2.5 rounded-xl text-xs font-bold cursor-pointer'}
@@ -505,7 +592,6 @@ od.forEach(function(id2){var el=document.getElementById(id2);if(el)el.open=true}
 document.querySelectorAll('.log-box[data-bot-id]').forEach(function(e){if(sp[e.dataset.botId]!==undefined)e.scrollTop=sp[e.dataset.botId]});
 }
 
-var wa=document.getElementById('welcome-audio');wa.volume=.8;var pp=wa.play();if(pp!==undefined){pp.catch(function(){var f=function(){wa.play();document.removeEventListener('click',f);document.removeEventListener('keydown',f)};document.addEventListener('click',f);document.addEventListener('keydown',f)})}
 setInterval(function(){updateUI(false);updateSystemStatus();var m1=document.getElementById('modal-app-center');if(m1&&m1.classList.contains('active')){if(document.getElementById('view-ff').classList.contains('active-view'))loadFFStatus();if(document.getElementById('view-music').classList.contains('active-view'))loadMusicStatus()}var m2=document.getElementById('modal-tavern');if(m2&&m2.classList.contains('active')){if(document.getElementById('view-cron').classList.contains('active-view'))loadCronStatus();if(document.getElementById('view-afk').classList.contains('active-view'))loadAfkStatus();if(document.getElementById('view-tavern').classList.contains('active-view')){loadCronStatus();loadAfkStatus()}}},3000);
 updateUI(true);
 <\/script>
